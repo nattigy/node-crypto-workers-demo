@@ -22,3 +22,4 @@ Endpoints:
 
 - `GET /` — returns plain text greeting
 - `GET /health` — returns JSON {"status":"ok"}
+# node-crypto-workers-demo
