@@ -460,4 +460,158 @@ Simple bounded pattern (conceptual):
 
 ---
 
+## Session 8: Custom Worker Thread Pool Implementation
+
+**User:** ok lets say i am not going to use thurd party package for worker thread management i want to handle my own worker threads also considering the cpu size while creading worker threds for all decryption requests in my code base i have a sperate function in a separate file that handles all encryption and decryption how can i manage worker threads there
+
+**Assistant:** I've created a complete custom worker thread pool system for you. Here's what was implemented:
+
+**1) `worker-pool.js` - Core Pool Manager**
+Handles:
+- Fixed pool sized to CPU cores minus 1 (keeps event loop responsive)
+- Task queuing when all workers are busy
+- Automatic timeout handling (5 second limit)
+- Pool statistics (active workers, queue length)
+- Graceful shutdown
+
+Key features:
+```javascript
+class WorkerPool {
+  constructor(workerScript, maxThreads = null) {
+    // Auto-sizes to os.cpus().length - 1
+    this.maxThreads = maxThreads || Math.max(1, os.cpus().length - 1);
+    this.workers = []; // Fixed array of workers
+    this.taskQueue = []; // FIFO queue for backpressure
+    this.activeWorkers = new Set(); // Track in-flight tasks
+  }
+
+  runTask(taskData) {
+    // Find available worker or queue task
+    // Returns promise that resolves when worker finishes
+  }
+
+  getStats() {
+    // Returns { totalWorkers, activeWorkers, idleWorkers, queuedTasks }
+  }
+}
+```
+
+**2) `crypto-worker.js` - Worker Thread Implementation**
+Runs in worker threads and handles:
+- AES-256-GCM decryption
+- AES-256-GCM encryption
+- RSA signing
+- RSA verification
+
+All CPU work happens here (off main thread):
+```javascript
+const handlers = {
+  decrypt: (data) => { /* AES-256-GCM decrypt */ },
+  encrypt: (data) => { /* AES-256-GCM encrypt */ },
+  sign: (data) => { /* RSA sign */ },
+  verify: (data) => { /* RSA verify */ }
+};
+
+parentPort.on('message', (task) => {
+  const result = handlers[task.operation](task);
+  parentPort.postMessage(result);
+});
+```
+
+**3) `crypto-manager.js` - Simple API Wrapper**
+Provides clean async methods:
+```javascript
+class CryptoManager {
+  async decrypt(ciphertext, key, iv, authTag) {
+    // Offloads to worker pool, returns plaintext
+  }
+
+  async encrypt(plaintext, key, iv) {
+    // Returns { ciphertext, authTag }
+  }
+
+  async sign(payload, privateKeyPem) {
+    // Returns base64 signature
+  }
+
+  getStats() {
+    // Shows pool utilization
+  }
+}
+```
+
+**4) Updated `node.js` - Integration Example**
+Added routes demonstrating worker usage:
+```javascript
+const cryptoManager = new CryptoManager();
+
+// POST /decrypt - decrypts megabytes of data without blocking
+app.post('/decrypt', async (req, res) => {
+  const plaintext = await cryptoManager.decrypt(
+    req.body.ciphertext,
+    req.body.key,
+    req.body.iv,
+    req.body.authTag
+  );
+  res.json({
+    success: true,
+    plaintext,
+    poolStats: cryptoManager.getStats()
+  });
+});
+
+// GET /pool-stats - monitor worker utilization
+app.get('/pool-stats', (req, res) => {
+  res.json(cryptoManager.getStats());
+});
+```
+
+**How it works under the hood:**
+
+1. Request arrives → CryptoManager.decrypt() called
+2. Main thread (event loop) queues task to pool
+3. Main thread returns immediately (non-blocking)
+4. Worker thread processes crypto work
+5. Worker sends result back via message
+6. Promise resolves and response is sent
+
+**Flow with multiple concurrent requests:**
+```
+Request 1 ──→ Worker 1 (decrypting 5MB)  ✓ Uses Core 1
+Request 2 ──→ Worker 2 (decrypting 5MB)  ✓ Uses Core 2
+Request 3 ──→ Worker 3 (decrypting 5MB)  ✓ Uses Core 3
+Request 4 ──→ Queue (all workers busy)   ⏳ Waits
+Request 5 ──→ Queue (all workers busy)   ⏳ Waits
+Request 1 completes → Worker 1 free → Request 4 processes
+```
+
+**Key advantages of this approach:**
+- **No external deps:** Pure Node.js worker_threads module
+- **CPU-aware:** Pool size = cores - 1 (automatic)
+- **Bounded:** Fixed worker count, no runaway thread creation
+- **Backpressure:** Queue tasks when workers busy, prevents overload
+- **Observable:** getStats() shows real-time pool utilization
+- **Timeout protection:** 5 second limit per task prevents hangs
+- **Graceful shutdown:** cleanup on SIGINT
+
+**Usage for your 3 APIs:**
+In your separate crypto functions file, just do:
+```javascript
+const cryptoManager = new CryptoManager();
+
+// In any function
+const decrypted = await cryptoManager.decrypt(ciphertext, key, iv, authTag);
+// ^ Main thread free while worker decrypts megabytes
+```
+
+The worker thread pool will automatically:
+- Distribute work across CPU cores
+- Queue requests when all workers busy
+- Return to event loop immediately (non-blocking)
+- Handle errors and timeouts
+
+Ready to test?
+
+---
+
 **End of Complete Conversation Transcript**
